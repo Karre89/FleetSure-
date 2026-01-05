@@ -1,0 +1,4 @@
+@prisma/client=true
+prisma=true
+bcrypt=true
+@prisma/engines=true
