@@ -1,0 +1,884 @@
+# FleetSure - Database Schema
+
+> PostgreSQL database schema using Prisma ORM. All money values stored as integers (cents).
+
+---
+
+## 🗄️ Entity Relationship Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                           ORGANIZATIONS                              │
+│  Fleet (tenant) ─────────────────────────────────────────────────── │
+│       │                                                              │
+│       ├── Users (dispatchers)                                        │
+│       ├── Vehicles                                                   │
+│       ├── Jobs ──────────┬── JobStatusHistory                        │
+│       │                  ├── Parts ──── PartDelivery                 │
+│       │                  └── JobPhotos                               │
+│       └── Invoices ──── InvoiceLineItems                             │
+│                                                                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                           CONTRACTORS                                │
+│  Mechanic ────────────── MechanicCertification                       │
+│       │                  MechanicServiceArea                         │
+│       └── Jobs (assigned)                                            │
+│                                                                      │
+│  Runner ─────────────── RunnerTask ──── RunnerTaskPhoto              │
+│                                                                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                           SYSTEM                                     │
+│  Admin ──────────────── AuditLog                                     │
+│  ServiceRegion                                                       │
+│  PartVendor                                                          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📋 Complete Prisma Schema
+
+```prisma
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum UserRole {
+  ADMIN
+  FLEET_OWNER
+  FLEET_DISPATCHER
+  MECHANIC
+  RUNNER
+}
+
+enum JobStatus {
+  REQUESTED
+  ASSIGNED
+  ACCEPTED
+  EN_ROUTE
+  ON_SITE
+  PARTS_REQUESTED
+  PARTS_DISPATCHED
+  PARTS_DELIVERED
+  COMPLETED
+  PAID
+  CANCELLED
+}
+
+enum JobUrgency {
+  STANDARD
+  PRIORITY
+  EMERGENCY
+}
+
+enum JobType {
+  ROADSIDE
+  SCHEDULED
+  PREVENTIVE
+}
+
+enum PartFulfillmentType {
+  MECHANIC_PICKUP
+  RUNNER_DELIVERY
+  PARTNER_DELIVERY
+}
+
+enum PartStatus {
+  REQUESTED
+  SOURCING
+  CONFIRMED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
+enum RunnerTaskStatus {
+  PENDING
+  ACCEPTED
+  PICKING_UP
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  FAILED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+// ============================================================================
+// USER & AUTH
+// ============================================================================
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  passwordHash      String
+  firstName         String
+  lastName          String
+  phone             String?
+  role              UserRole
+  isActive          Boolean   @default(true)
+  emailVerified     Boolean   @default(false)
+  lastLoginAt       DateTime?
+  
+  // Relations
+  fleetId           String?
+  fleet             Fleet?    @relation(fields: [fleetId], references: [id])
+  
+  // Timestamps
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  // Audit trail
+  auditLogs         AuditLog[]
+  
+  @@index([email])
+  @@index([fleetId])
+  @@index([role])
+}
+
+model RefreshToken {
+  id            String   @id @default(cuid())
+  token         String   @unique
+  userId        String
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  revokedAt     DateTime?
+  
+  @@index([token])
+  @@index([userId])
+}
+
+// ============================================================================
+// FLEET (TENANT)
+// ============================================================================
+
+model Fleet {
+  id                    String    @id @default(cuid())
+  name                  String
+  billingEmail          String
+  phone                 String?
+  address               String?
+  city                  String?
+  state                 String?
+  zipCode               String?
+  
+  // Contract details
+  contractType          String?   // 'per_truck' | 'per_job'
+  perTruckRateCents     Int?      // Monthly rate per truck in cents
+  emergencyRateCents    Int?      // Emergency job rate in cents
+  
+  // Billing
+  stripeCustomerId      String?   @unique
+  billingDay            Int       @default(1) // Day of month for invoicing
+  paymentTermDays       Int       @default(30)
+  
+  // Status
+  isActive              Boolean   @default(true)
+  
+  // Relations
+  users                 User[]
+  vehicles              Vehicle[]
+  jobs                  Job[]
+  invoices              Invoice[]
+  
+  // Timestamps
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  @@index([name])
+  @@index([stripeCustomerId])
+}
+
+model Vehicle {
+  id              String    @id @default(cuid())
+  fleetId         String
+  fleet           Fleet     @relation(fields: [fleetId], references: [id], onDelete: Cascade)
+  
+  // Vehicle info
+  unitNumber      String    // Fleet's internal number
+  vin             String?
+  make            String
+  model           String
+  year            Int
+  licensePlate    String?
+  state           String?
+  
+  // Type
+  vehicleType     String    // 'truck' | 'trailer' | 'reefer'
+  engineType      String?   // 'diesel' | 'natural_gas'
+  
+  // Status
+  isActive        Boolean   @default(true)
+  notes           String?
+  
+  // Relations
+  jobs            Job[]
+  
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@unique([fleetId, unitNumber])
+  @@index([fleetId])
+  @@index([vin])
+}
+
+// ============================================================================
+// MECHANIC
+// ============================================================================
+
+model Mechanic {
+  id                  String    @id @default(cuid())
+  
+  // Personal info
+  email               String    @unique
+  passwordHash        String
+  firstName           String
+  lastName            String
+  phone               String
+  profilePhotoUrl     String?
+  
+  // Location
+  currentLatitude     Float?
+  currentLongitude    Float?
+  lastLocationUpdate  DateTime?
+  
+  // Availability
+  isAvailable         Boolean   @default(false)
+  isOnline            Boolean   @default(false)
+  
+  // Business info
+  businessName        String?
+  ein                 String?   // Employer ID Number (encrypted in prod)
+  
+  // Payment
+  stripeConnectId     String?   @unique
+  
+  // Rating
+  averageRating       Float     @default(0)
+  totalJobs           Int       @default(0)
+  totalReviews        Int       @default(0)
+  
+  // Status
+  isActive            Boolean   @default(true)
+  isApproved          Boolean   @default(false)
+  approvedAt          DateTime?
+  
+  // Relations
+  certifications      MechanicCertification[]
+  serviceAreas        MechanicServiceArea[]
+  jobs                Job[]
+  
+  // Timestamps
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  
+  @@index([email])
+  @@index([isAvailable, isOnline, isActive])
+  @@index([currentLatitude, currentLongitude])
+}
+
+model MechanicCertification {
+  id              String    @id @default(cuid())
+  mechanicId      String
+  mechanic        Mechanic  @relation(fields: [mechanicId], references: [id], onDelete: Cascade)
+  
+  certType        String    // 'ASE' | 'DOT' | 'EPA' | 'OTHER'
+  certNumber      String?
+  issuedAt        DateTime?
+  expiresAt       DateTime?
+  documentUrl     String?
+  isVerified      Boolean   @default(false)
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@index([mechanicId])
+  @@index([expiresAt])
+}
+
+model MechanicServiceArea {
+  id              String    @id @default(cuid())
+  mechanicId      String
+  mechanic        Mechanic  @relation(fields: [mechanicId], references: [id], onDelete: Cascade)
+  
+  regionId        String
+  region          ServiceRegion @relation(fields: [regionId], references: [id])
+  
+  // Service types offered in this area
+  offersRoadside  Boolean   @default(true)
+  offersScheduled Boolean   @default(true)
+  
+  createdAt       DateTime  @default(now())
+  
+  @@unique([mechanicId, regionId])
+  @@index([regionId])
+}
+
+// ============================================================================
+// RUNNER
+// ============================================================================
+
+model Runner {
+  id                  String    @id @default(cuid())
+  
+  // Personal info
+  email               String    @unique
+  passwordHash        String
+  firstName           String
+  lastName            String
+  phone               String
+  profilePhotoUrl     String?
+  
+  // Location
+  currentLatitude     Float?
+  currentLongitude    Float?
+  lastLocationUpdate  DateTime?
+  
+  // Availability
+  isAvailable         Boolean   @default(false)
+  isOnline            Boolean   @default(false)
+  
+  // Vehicle
+  vehicleType         String?   // 'car' | 'van' | 'truck'
+  vehiclePlate        String?
+  
+  // Payment
+  stripeConnectId     String?   @unique
+  hourlyRateCents     Int?      // If hourly employee vs 1099
+  
+  // Stats
+  totalDeliveries     Int       @default(0)
+  averageDeliveryTime Int?      // In minutes
+  
+  // Status
+  isActive            Boolean   @default(true)
+  isApproved          Boolean   @default(false)
+  approvedAt          DateTime?
+  employmentType      String    @default("1099") // '1099' | 'W2'
+  
+  // Relations
+  tasks               RunnerTask[]
+  
+  // Timestamps
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  
+  @@index([email])
+  @@index([isAvailable, isOnline, isActive])
+  @@index([currentLatitude, currentLongitude])
+}
+
+// ============================================================================
+// JOB
+// ============================================================================
+
+model Job {
+  id                    String      @id @default(cuid())
+  jobNumber             String      @unique // Human-readable: FS-2024-00001
+  
+  // Fleet/Vehicle
+  fleetId               String
+  fleet                 Fleet       @relation(fields: [fleetId], references: [id])
+  vehicleId             String?
+  vehicle               Vehicle?    @relation(fields: [vehicleId], references: [id])
+  
+  // Mechanic
+  mechanicId            String?
+  mechanic              Mechanic?   @relation(fields: [mechanicId], references: [id])
+  
+  // Location
+  locationLatitude      Float
+  locationLongitude     Float
+  locationAddress       String
+  locationCity          String?
+  locationState         String?
+  locationZip           String?
+  locationNotes         String?     // "Behind the warehouse", etc.
+  
+  // Issue details
+  issueType             String      // 'engine' | 'electrical' | 'brakes' | 'tire' | 'transmission' | 'other'
+  issueDescription      String
+  urgency               JobUrgency
+  jobType               JobType
+  
+  // Status
+  status                JobStatus   @default(REQUESTED)
+  
+  // SLA tracking (timestamps in UTC)
+  requestedAt           DateTime    @default(now())
+  assignedAt            DateTime?
+  acceptedAt            DateTime?
+  enRouteAt             DateTime?
+  arrivedAt             DateTime?
+  completedAt           DateTime?
+  paidAt                DateTime?
+  cancelledAt           DateTime?
+  cancelReason          String?
+  
+  // SLA breach flags
+  slaBreached           Boolean     @default(false)
+  slaBreachType         String?     // 'ASSIGNMENT' | 'RESPONSE' | 'ARRIVAL'
+  
+  // Pricing (all in cents)
+  estimatedLaborCents   Int?
+  actualLaborCents      Int?
+  partsTotalCents       Int?
+  platformFeeCents      Int?
+  totalCents            Int?
+  
+  // Mechanic notes
+  diagnosisNotes        String?
+  repairNotes           String?
+  
+  // Relations
+  statusHistory         JobStatusHistory[]
+  parts                 Part[]
+  photos                JobPhoto[]
+  
+  // Invoice
+  invoiceId             String?
+  invoice               Invoice?    @relation(fields: [invoiceId], references: [id])
+  
+  // Timestamps
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+  
+  @@index([fleetId])
+  @@index([mechanicId])
+  @@index([status])
+  @@index([requestedAt])
+  @@index([jobNumber])
+}
+
+model JobStatusHistory {
+  id            String      @id @default(cuid())
+  jobId         String
+  job           Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  
+  fromStatus    JobStatus?
+  toStatus      JobStatus
+  changedBy     String?     // User/Mechanic/System ID
+  changedByType String      // 'USER' | 'MECHANIC' | 'RUNNER' | 'SYSTEM'
+  reason        String?
+  metadata      Json?       // Additional context
+  
+  createdAt     DateTime    @default(now())
+  
+  @@index([jobId])
+  @@index([createdAt])
+}
+
+model JobPhoto {
+  id            String    @id @default(cuid())
+  jobId         String
+  job           Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  
+  photoUrl      String
+  photoType     String    // 'before' | 'during' | 'after' | 'part' | 'damage'
+  caption       String?
+  uploadedBy    String    // Mechanic ID
+  
+  createdAt     DateTime  @default(now())
+  
+  @@index([jobId])
+}
+
+// ============================================================================
+// PARTS
+// ============================================================================
+
+model Part {
+  id                  String              @id @default(cuid())
+  jobId               String
+  job                 Job                 @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  
+  // Part details
+  partNumber          String?
+  name                String
+  description         String?
+  quantity            Int                 @default(1)
+  
+  // Sourcing
+  vendorId            String?
+  vendor              PartVendor?         @relation(fields: [vendorId], references: [id])
+  vendorPartNumber    String?
+  
+  // Fulfillment
+  fulfillmentType     PartFulfillmentType
+  status              PartStatus          @default(REQUESTED)
+  
+  // Pricing (cents)
+  unitCostCents       Int?
+  markupPercent       Int                 @default(15)
+  totalCostCents      Int?                // (unitCost * quantity) * (1 + markup)
+  
+  // Tracking
+  requestedAt         DateTime            @default(now())
+  confirmedAt         DateTime?
+  deliveredAt         DateTime?
+  
+  // Relations
+  delivery            PartDelivery?
+  
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  
+  @@index([jobId])
+  @@index([status])
+}
+
+model PartDelivery {
+  id                String          @id @default(cuid())
+  partId            String          @unique
+  part              Part            @relation(fields: [partId], references: [id], onDelete: Cascade)
+  
+  runnerTaskId      String?
+  runnerTask        RunnerTask?     @relation(fields: [runnerTaskId], references: [id])
+  
+  // Pickup location
+  pickupLatitude    Float?
+  pickupLongitude   Float?
+  pickupAddress     String?
+  
+  // Delivery location (mechanic/job location)
+  deliveryLatitude  Float
+  deliveryLongitude Float
+  deliveryAddress   String
+  
+  // Timestamps
+  pickedUpAt        DateTime?
+  deliveredAt       DateTime?
+  
+  // Proof
+  proofPhotoUrl     String?
+  signatureUrl      String?
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+}
+
+model PartVendor {
+  id              String    @id @default(cuid())
+  name            String    // 'NAPA' | 'FleetPride' | etc.
+  code            String    @unique // 'NAPA' | 'FLEETPRIDE'
+  
+  // Contact
+  phone           String?
+  email           String?
+  
+  // Location
+  address         String?
+  city            String?
+  state           String?
+  zipCode         String?
+  latitude        Float?
+  longitude       Float?
+  
+  // Hours
+  hoursJson       Json?     // Operating hours
+  
+  isActive        Boolean   @default(true)
+  isPriority      Boolean   @default(false)
+  
+  // Relations
+  parts           Part[]
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@index([code])
+  @@index([state, city])
+}
+
+// ============================================================================
+// RUNNER TASKS
+// ============================================================================
+
+model RunnerTask {
+  id                  String            @id @default(cuid())
+  taskNumber          String            @unique // RT-2024-00001
+  
+  runnerId            String
+  runner              Runner            @relation(fields: [runnerId], references: [id])
+  
+  // Status
+  status              RunnerTaskStatus  @default(PENDING)
+  
+  // Pickup
+  pickupLatitude      Float
+  pickupLongitude     Float
+  pickupAddress       String
+  pickupNotes         String?
+  
+  // Delivery
+  deliveryLatitude    Float
+  deliveryLongitude   Float
+  deliveryAddress     String
+  deliveryNotes       String?
+  
+  // Timing
+  assignedAt          DateTime          @default(now())
+  acceptedAt          DateTime?
+  pickupArrivedAt     DateTime?
+  pickedUpAt          DateTime?
+  deliveryStartedAt   DateTime?
+  deliveredAt         DateTime?
+  
+  // Payment (cents)
+  paymentCents        Int?
+  
+  // Relations
+  partDeliveries      PartDelivery[]
+  photos              RunnerTaskPhoto[]
+  
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  
+  @@index([runnerId])
+  @@index([status])
+}
+
+model RunnerTaskPhoto {
+  id            String      @id @default(cuid())
+  taskId        String
+  task          RunnerTask  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  photoUrl      String
+  photoType     String      // 'pickup_confirmation' | 'delivery_proof'
+  
+  createdAt     DateTime    @default(now())
+  
+  @@index([taskId])
+}
+
+// ============================================================================
+// BILLING
+// ============================================================================
+
+model Invoice {
+  id                String          @id @default(cuid())
+  invoiceNumber     String          @unique // INV-2024-00001
+  
+  fleetId           String
+  fleet             Fleet           @relation(fields: [fleetId], references: [id])
+  
+  // Period
+  periodStart       DateTime
+  periodEnd         DateTime
+  
+  // Amounts (cents)
+  subtotalCents     Int
+  taxCents          Int             @default(0)
+  totalCents        Int
+  
+  // Status
+  status            InvoiceStatus   @default(DRAFT)
+  
+  // Stripe
+  stripeInvoiceId   String?         @unique
+  
+  // Dates
+  issuedAt          DateTime?
+  dueAt             DateTime?
+  paidAt            DateTime?
+  
+  // Relations
+  lineItems         InvoiceLineItem[]
+  jobs              Job[]
+  payments          Payment[]
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  
+  @@index([fleetId])
+  @@index([status])
+  @@index([invoiceNumber])
+}
+
+model InvoiceLineItem {
+  id              String    @id @default(cuid())
+  invoiceId       String
+  invoice         Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  description     String
+  quantity        Int       @default(1)
+  unitPriceCents  Int
+  totalCents      Int
+  
+  // Reference
+  jobId           String?   // If line item is for a specific job
+  
+  createdAt       DateTime  @default(now())
+  
+  @@index([invoiceId])
+}
+
+model Payment {
+  id                  String        @id @default(cuid())
+  invoiceId           String
+  invoice             Invoice       @relation(fields: [invoiceId], references: [id])
+  
+  amountCents         Int
+  status              PaymentStatus @default(PENDING)
+  
+  // Stripe
+  stripePaymentIntentId String?     @unique
+  stripeChargeId      String?
+  
+  // Timing
+  processedAt         DateTime?
+  failedAt            DateTime?
+  failureReason       String?
+  
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  
+  @@index([invoiceId])
+  @@index([stripePaymentIntentId])
+}
+
+// ============================================================================
+// SYSTEM
+// ============================================================================
+
+model ServiceRegion {
+  id              String    @id @default(cuid())
+  name            String    // 'Seattle Metro', 'Portland Metro'
+  code            String    @unique // 'SEA', 'PDX'
+  state           String    // 'WA', 'OR'
+  
+  // Bounding box
+  northLat        Float
+  southLat        Float
+  eastLng         Float
+  westLng         Float
+  
+  // Status
+  isActive        Boolean   @default(true)
+  launchDate      DateTime?
+  
+  // Relations
+  mechanicServiceAreas MechanicServiceArea[]
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@index([code])
+  @@index([state])
+}
+
+model AuditLog {
+  id              String    @id @default(cuid())
+  
+  // Actor
+  userId          String?
+  user            User?     @relation(fields: [userId], references: [id])
+  actorType       String    // 'USER' | 'MECHANIC' | 'RUNNER' | 'SYSTEM' | 'ADMIN'
+  actorId         String?   // ID of the actor if not a User
+  
+  // Action
+  action          String    // 'CREATE' | 'UPDATE' | 'DELETE' | 'LOGIN' | etc.
+  entityType      String    // 'Job' | 'Fleet' | 'Mechanic' | etc.
+  entityId        String
+  
+  // Data
+  previousData    Json?
+  newData         Json?
+  metadata        Json?
+  
+  // Context
+  ipAddress       String?
+  userAgent       String?
+  
+  createdAt       DateTime  @default(now())
+  
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+}
+```
+
+---
+
+## 🔗 Key Relationships Explained
+
+### Fleet → Jobs
+- One fleet has many jobs
+- Jobs are the core business entity
+- Fleet isolation is critical (multi-tenant)
+
+### Job → Parts → PartDelivery → RunnerTask
+- Job can request multiple parts
+- Each part tracks its fulfillment status
+- Part delivery links to runner task if runner-delivered
+
+### Mechanic → Jobs
+- Mechanic is assigned to jobs
+- Tracks location for dispatch
+- Tracks certifications and service areas
+
+### Invoice → InvoiceLineItems → Jobs
+- Monthly invoices aggregate jobs
+- Line items can reference specific jobs
+- Supports both per-truck and per-job billing
+
+---
+
+## 📊 Indexes Strategy
+
+Key indexes for performance:
+
+1. **Job lookups**: `[fleetId]`, `[mechanicId]`, `[status]`, `[requestedAt]`
+2. **Location queries**: `[latitude, longitude]` on Mechanic, Runner, PartVendor
+3. **SLA monitoring**: `[status, requestedAt]` for finding at-risk jobs
+4. **Audit queries**: `[entityType, entityId]`, `[createdAt]`
+
+---
+
+## 🔄 Migration Strategy
+
+### Initial Migration
+```bash
+npx prisma migrate dev --name init
+```
+
+### Seed Data
+Create `prisma/seed.ts` with:
+- 2-3 test fleets
+- 5-10 test vehicles per fleet
+- 3-5 test mechanics
+- 2 test runners
+- 1-2 service regions (Seattle, Portland)
+- Sample part vendors (NAPA, FleetPride)
+
+---
+
+*Continue to API_SPECIFICATION.md for endpoints →*

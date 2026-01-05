@@ -1,0 +1,24 @@
+{
+  "project": {
+    "name": "FleetSure",
+    "description": "Uber-style platform for diesel truck roadside repair",
+    "version": "0.1.0"
+  },
+  "permissions": {
+    "autoApprove": [
+      "Bash(npm:*)",
+      "Bash(pnpm:*)",
+      "Bash(npx:*)",
+      "Bash(git:*)",
+      "Bash(docker:*)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep"
+    ]
+  }
+}
