@@ -130,9 +130,9 @@ export default function LoginPage() {
         <div className="mt-6 p-4 rounded-lg bg-gray-100 text-sm">
           <p className="font-medium text-gray-700 mb-2">Demo Accounts:</p>
           <div className="space-y-1 text-gray-600">
-            <p><strong>Fleet:</strong> demo@fleet.com / demo123</p>
-            <p><strong>Mechanic:</strong> demo@mechanic.com / demo123</p>
-            <p><strong>Runner:</strong> demo@runner.com / demo123</p>
+            <p><strong>Fleet:</strong> demo@fleet.com / demo1234</p>
+            <p><strong>Mechanic:</strong> demo@mechanic.com / demo1234</p>
+            <p><strong>Runner:</strong> demo@runner.com / demo1234</p>
           </div>
         </div>
       </div>
