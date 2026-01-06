@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Loader2,
   Power,
+  Briefcase,
 } from 'lucide-react'
 import Link from 'next/link'
 
