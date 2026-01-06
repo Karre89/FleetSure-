@@ -13,10 +13,9 @@ import { HealthModule } from './modules/health/health.module'
 
 @Module({
   imports: [
-    // Configuration
+    // Configuration - reads from process.env (Railway env vars)
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '../../.env',
     }),
 
     // Database

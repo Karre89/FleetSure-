@@ -480,7 +480,7 @@ export default function NewJobPage() {
                       formData.urgency === 'EMERGENCY'
                         ? 'destructive'
                         : formData.urgency === 'PRIORITY'
-                        ? 'warning'
+                        ? 'urgent'
                         : 'secondary'
                     }
                   >
