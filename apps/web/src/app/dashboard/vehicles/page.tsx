@@ -1,5 +1,7 @@
 'use client'
 
+export const dynamic = 'force-dynamic'
+
 import { useQuery } from '@tanstack/react-query'
 import { Header } from '@/components/dashboard/header'
 import { Card, CardContent, Badge, Button, Input } from '@/components/ui'
