@@ -283,7 +283,7 @@ export default function MechanicJobsPage() {
                               job.urgency === 'EMERGENCY'
                                 ? 'destructive'
                                 : job.urgency === 'PRIORITY'
-                                ? 'warning'
+                                ? 'urgent'
                                 : 'secondary'
                             }
                           >

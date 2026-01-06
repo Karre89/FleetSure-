@@ -17,10 +17,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private config: ConfigService,
     private prisma: PrismaService
   ) {
+    const jwtSecret = process.env.JWT_SECRET || config.get<string>('JWT_SECRET')
+    console.log('JwtStrategy init - JWT_SECRET exists:', !!jwtSecret, '- length:', jwtSecret?.length || 0)
+    if (!jwtSecret) {
+      console.error('JWT env vars found:', Object.keys(process.env).filter(k => k.toLowerCase().includes('jwt')))
+      throw new Error('JWT_SECRET environment variable is required')
+    }
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: process.env.JWT_SECRET,
+      secretOrKey: jwtSecret,
     })
   }
 
