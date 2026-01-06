@@ -86,8 +86,8 @@ export default function NewJobPage() {
     vehicleId: '',
     issueType: '',
     issueDescription: '',
-    urgency: 'PRIORITY' as const,
-    jobType: 'ROADSIDE' as const,
+    urgency: 'PRIORITY' as 'STANDARD' | 'PRIORITY' | 'EMERGENCY',
+    jobType: 'ROADSIDE' as 'ROADSIDE' | 'SCHEDULED' | 'PREVENTIVE',
     location: {
       latitude: 47.6062,
       longitude: -122.3321,
